@@ -8,6 +8,7 @@ dependencies = [
     "click>=8.1.8",
     "easyocr>=1.7.2",
     "fast-plate-ocr>=0.3.0",
+    "ffmpeg>=1.4",
     "matplotlib>=3.10.0",
     "onnx>=1.17.0",
     "pytesseract>=0.3.13",
@@ -15,4 +16,5 @@ dependencies = [
     "transformers>=4.48.3",
     "ultralytics>=8.3.75",
     "yolov5>=7.0.14",
+    "yt-dlp>=2025.1.26",
 ]
