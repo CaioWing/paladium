@@ -13,11 +13,23 @@ from utils.vehicle_data import Vehicle
 import os
 
 
-class SimpleTracker:
-    def __init__(self, iou_threshold=0.3):
+class Track:
+    def __init__(self, bbox, track_id, last_frame=0):
+        self.bbox = bbox  # [x1, y1, x2, y2]
+        self.track_id = track_id
+        self.lost_frames = 0
+        self.plate_history = (
+            []
+        )  # Lista de tuplas: (ocr_confidence, LicensePlate, vehicle_bbox)
+        self.last_frame = last_frame
+
+
+class Tracker:
+    def __init__(self, iou_threshold=0.3, max_lost=5):
+        self.tracks = {}  # dict de track_id: Track
         self.next_id = 0
-        self.tracks = []  # Cada track: [x1, y1, x2, y2, id]
         self.iou_threshold = iou_threshold
+        self.max_lost = max_lost
 
     def iou(self, boxA, boxB):
         xA = max(boxA[0], boxB[0])
@@ -29,57 +41,71 @@ class SimpleTracker:
         boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
         return interArea / float(boxAArea + boxBArea - interArea)
 
-    def update(self, detections):
+    def update(self, detections, frame_idx):
         """
         Atualiza os tracks com as novas detecções.
-        detections: array numpy com shape (N, 5) onde cada linha é [x1, y1, x2, y2, score]
+        :param detections: lista de [x1, y1, x2, y2, score]
+        :param frame_idx: número do frame atual
+        :return: lista de tracks no formato [x1, y1, x2, y2, track_id]
         """
-        updated_tracks = []
-        if len(self.tracks) == 0:
-            for det in detections:
-                x1, y1, x2, y2, score = det
-                updated_tracks.append([x1, y1, x2, y2, self.next_id])
-                self.next_id += 1
-        else:
-            assigned = [False] * len(detections)
-            new_tracks = []
-            for track in self.tracks:
-                best_iou = 0
-                best_det_idx = -1
-                for idx, det in enumerate(detections):
-                    if not assigned[idx]:
-                        x1, y1, x2, y2, score = det
-                        current_iou = self.iou(track[:4], [x1, y1, x2, y2])
-                        if current_iou > best_iou:
-                            best_iou = current_iou
-                            best_det_idx = idx
-                if best_iou >= self.iou_threshold and best_det_idx != -1:
-                    det = detections[best_det_idx]
-                    new_tracks.append([det[0], det[1], det[2], det[3], track[4]])
-                    assigned[best_det_idx] = True
-            for idx, det in enumerate(detections):
-                if not assigned[idx]:
-                    new_tracks.append([det[0], det[1], det[2], det[3], self.next_id])
-                    self.next_id += 1
-            updated_tracks = new_tracks
+        assigned_detections = set()
+        # Tenta associar cada track existente à detecção de maior IOU
+        for tid, track in list(self.tracks.items()):
+            best_iou = 0
+            best_det_idx = -1
+            best_det = None
+            for i, det in enumerate(detections):
+                if i in assigned_detections:
+                    continue
+                current_iou = self.iou(track.bbox, det[:4])
+                if current_iou > best_iou:
+                    best_iou = current_iou
+                    best_det = det
+                    best_det_idx = i
+            if best_iou >= self.iou_threshold:
+                track.bbox = best_det[:4]
+                track.lost_frames = 0
+                track.last_frame = frame_idx
+                assigned_detections.add(best_det_idx)
+            else:
+                track.lost_frames += 1
 
-        self.tracks = updated_tracks
-        return np.array(updated_tracks)
+        # Cria novos tracks para detecções não associadas
+        for i, det in enumerate(detections):
+            if i not in assigned_detections:
+                self.tracks[self.next_id] = Track(
+                    bbox=det[:4], track_id=self.next_id, last_frame=frame_idx
+                )
+                self.next_id += 1
+
+        # Remove tracks que estão perdidas há muitos frames
+        to_remove = [
+            tid
+            for tid, track in self.tracks.items()
+            if track.lost_frames > self.max_lost
+        ]
+        for tid in to_remove:
+            del self.tracks[tid]
+
+        # Retorna uma lista de tracks para anotação: [x1, y1, x2, y2, track_id]
+        track_list = [
+            [track.bbox[0], track.bbox[1], track.bbox[2], track.bbox[3], track.track_id]
+            for track in self.tracks.values()
+        ]
+        return track_list
 
 
 class VideoProcessor:
     def __init__(self, batch_size=1):
         self.image_processor = ImageProcessor()
-        self.tracker = SimpleTracker()
+        self.tracker = Tracker(iou_threshold=0.6, max_lost=5)
         self.batch_size = batch_size
-        # Histórico de inferências por veículo: {track_id: [(ocr_confidence, LicensePlate, vehicle_bbox), ...]}
-        self.track_plate_history = {}
-        self.active_tracks = set()  # IDs dos veículos atualmente visíveis
-        self.final_results = {}  # resultados finais para escrita no CSV
 
     def annotate_frame(self, frame, results, tracks):
-        """Desenha as caixinhas dos veículos (azul) e placas (a partir da otimização final – verde)."""
-        # Desenha as caixas dos veículos (azul) com ID
+        """
+        Desenha caixas azuis para os veículos (com ID).
+        """
+        # Desenha caixas dos veículos
         for t in tracks:
             x1, y1, x2, y2, tid = t
             cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
@@ -92,33 +118,14 @@ class VideoProcessor:
                 (255, 0, 0),
                 2,
             )
-        # Desenha as caixas de placas otimizadas (verde) e o texto da placa
-        for detection in results.values():
-            vehicle_obj = detection["vehicle"]
-            if vehicle_obj.plate:
-                plate = vehicle_obj.plate
-                x1, y1, x2, y2 = map(int, plate.bbox)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(
-                    frame,
-                    plate.text,
-                    (x1, max(y1 - 10, 0)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.9,
-                    (0, 255, 0),
-                    2,
-                )
         return frame
 
     def _process_car_plates(self, frame, track_ids):
         """
-        Para cada frame:
-          1. Detecta todas as placas na imagem completa (mede o tempo de inferência do detector).
-          2. Para cada placa, se estiver contida na caixa de um veículo, realiza OCR (mede o tempo do OCR).
-          3. Retorna:
-             - frame_plate_inferences: dicionário {track_id: [(ocr_conf, LicensePlate, vehicle_bbox), ...]}
-             - plate_detection_time (ms)
-             - ocr_detection_time (ms)
+        Para cada frame, detecta placas e realiza OCR para as detecções
+        que estão contidas na caixa do veículo.
+        Retorna um dicionário {track_id: [(ocr_conf, LicensePlate, vehicle_bbox), ...]}
+        e os tempos de detecção.
         """
         frame_plate_inferences = {}
         start_plate = time.perf_counter()
@@ -130,7 +137,6 @@ class VideoProcessor:
             p_x1, p_y1, p_x2, p_y2, p_score, _ = plate
             for car in track_ids:
                 x1, y1, x2, y2, car_id = car
-                # Se a placa estiver contida na caixa do veículo
                 if p_x1 >= x1 and p_y1 >= y1 and p_x2 <= x2 and p_y2 <= y2:
                     license_plate_crop = frame[
                         int(p_y1) : int(p_y2), int(p_x1) : int(p_x2)
@@ -146,19 +152,18 @@ class VideoProcessor:
                             detection_confidence=p_score,
                             ocr_confidence=text_score,
                         )
-                        vehicle_bbox = [x1, y1, x2, y2, 0]  # bbox do veículo
+                        vehicle_bbox = [x1, y1, x2, y2, 0]
                         if car_id not in frame_plate_inferences:
                             frame_plate_inferences[car_id] = []
                         frame_plate_inferences[car_id].append(
                             (lp.ocr_confidence, lp, vehicle_bbox)
                         )
-                    break  # já associou a placa a este veículo
+                    break  # Já associou a placa a este veículo
         return frame_plate_inferences, plate_detection_time, total_ocr_time
 
     def _annotate_debug_plate_detections(self, frame, frame_plate_inferences):
         """
-        Em debug, desenha todas as caixas de placas e os textos de OCR (cor amarelo)
-        conforme são calculados em cada frame.
+        Em modo debug, desenha todas as caixas de placa (amarelo) e o texto de OCR.
         """
         for car_id, inferences in frame_plate_inferences.items():
             for inference in inferences:
@@ -177,13 +182,12 @@ class VideoProcessor:
         return frame
 
     def process_video(
-        self, input_path, output_csv, output_video=None, frame_skip=1, debug=False
+        self, input_path, output_csv, output_video=None, frame_skip=10, debug=False
     ):
         """
-        Processa o vídeo, acumulando as inferências de placas para cada veículo.
-        A otimização (seleção do melhor OCR/placa) é feita apenas para o resultado final.
-        Se debug=True, além das anotações finais (em verde), são exibidas todas as
-        detecções de placas e OCR (em amarelo) em cada frame.
+        Processa o vídeo acumulando as inferências de placa para cada veículo.
+        No final, é gerada uma saída CSV com UMA linha por veículo e são impressas
+        no terminal as placas únicas.
         """
         ALLOWED_VIDEO_FORMATS = [".mp4", ".avi", ".mkv", ".mov"]
         if not any(input_path.lower().endswith(ext) for ext in ALLOWED_VIDEO_FORMATS):
@@ -209,71 +213,72 @@ class VideoProcessor:
 
         frames_buffer = [first_frame]
         frame_indices = [0]
-        final_frame_results = {}  # resultados finais para CSV
+        final_results = (
+            {}
+        )  # Será um dicionário com uma linha por veículo (chave: track_id)
         frame_counter = 0
         finished = False
 
         while not finished:
-            # Preenche o buffer até batch_size
             while len(frames_buffer) < self.batch_size:
                 ret, frame = cap.read()
                 if not ret:
                     finished = True
                     break
                 frame_counter += 1
-                pbar.update(1)
                 if frame_counter % frame_skip != 0:
                     continue
                 frames_buffer.append(frame)
                 frame_indices.append(frame_counter)
+                pbar.update(frame_skip if frame_skip > 1 else 1)
 
             if len(frames_buffer) == 0:
                 break
 
-            # Processa cada frame no batch
             for i, frame in enumerate(frames_buffer):
+                current_frame_idx = frame_indices[i]
                 # --- DETECÇÃO DE VEÍCULOS ---
                 start_vehicle = time.perf_counter()
                 vehicles = self.image_processor.detect_vehicles(frame)
                 vehicle_detection_time = (time.perf_counter() - start_vehicle) * 1000
 
-                tracks = self.tracker.update(np.array(vehicles))
-                current_tracks = set([t[4] for t in tracks])
+                # Atualiza o tracker com o frame atual
+                tracks = self.tracker.update(np.array(vehicles), current_frame_idx)
 
                 # --- DETECÇÃO DE PLACAS + OCR ---
                 frame_plate_inferences, plate_detection_time, ocr_detection_time = (
                     self._process_car_plates(frame, tracks)
                 )
 
-                # Acumula as inferências para cada veículo
+                # Atualiza o histórico de OCR de cada track
                 for tid, inferences in frame_plate_inferences.items():
-                    if tid not in self.track_plate_history:
-                        self.track_plate_history[tid] = []
-                    self.track_plate_history[tid].extend(inferences)
+                    if tid in self.tracker.tracks:
+                        self.tracker.tracks[tid].plate_history.extend(inferences)
 
-                # Otimiza a inferência final: seleciona a melhor detecção acumulada para cada track
+                # Monta dicionário para anotação (apenas se houver histórico de placa)
                 annotation_dict = {}
                 for t in tracks:
                     x1, y1, x2, y2, tid = t
                     if (
-                        tid in self.track_plate_history
-                        and self.track_plate_history[tid]
+                        tid in self.tracker.tracks
+                        and self.tracker.tracks[tid].plate_history
                     ):
                         best_entry = max(
-                            self.track_plate_history[tid], key=lambda x: x[0]
+                            self.tracker.tracks[tid].plate_history, key=lambda x: x[0]
                         )
                         best_plate = best_entry[1]
                         vehicle_obj = Vehicle(
-                            bbox=[x1, y1, x2, y2, 0], id=tid, plate=best_plate
+                            bbox=[x1, y1, x2, y2, 0],
+                            id=tid,
+                            plate=best_plate,
+                            frame_nmr=current_frame_idx,
                         )
                         annotation_dict[tid] = {"vehicle": vehicle_obj}
 
-                # Anota a imagem com as caixas dos veículos e com a detecção otimizada das placas (verde)
                 annotated_frame = self.annotate_frame(
                     frame.copy(), annotation_dict, tracks
                 )
 
-                # Em debug, sobrepõe também todas as detecções de placas/OCR (amarelo)
                 if debug:
                     annotated_frame = self._annotate_debug_plate_detections(
                         annotated_frame, frame_plate_inferences
@@ -293,53 +298,27 @@ class VideoProcessor:
                     )
                     cv2.imshow("Debug", annotated_frame)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
-                        cap.release()
-                        if video_writer is not None:
-                            video_writer.release()
-                        cv2.destroyAllWindows()
-                        pbar.close()
-                        write_csv(final_frame_results, output_csv)
-                        return final_frame_results
+                        finished = True
+                        break
 
                 if video_writer is not None:
                     video_writer.write(annotated_frame)
 
-                # Verifica os tracks perdidos (não presentes no frame atual)
-                lost_tracks = self.active_tracks - current_tracks
-                for tid in lost_tracks:
-                    if (
-                        tid in self.track_plate_history
-                        and self.track_plate_history[tid]
-                    ):
-                        best_entry = max(
-                            self.track_plate_history[tid], key=lambda x: x[0]
-                        )
-                        best_plate = best_entry[1]
-                        vehicle_bbox = best_entry[2]
-                        vehicle_obj = Vehicle(
-                            bbox=vehicle_bbox, id=tid, plate=best_plate
-                        )
-                        if frame_indices[i] not in final_frame_results:
-                            final_frame_results[frame_indices[i]] = {}
-                        final_frame_results[frame_indices[i]][tid] = {
-                            "vehicle": vehicle_obj
-                        }
-                        del self.track_plate_history[tid]
-                self.active_tracks = current_tracks
-
             frames_buffer = []
             frame_indices = []
 
-        # Finaliza tracks ativos ao final do vídeo
-        for tid in self.active_tracks:
-            if tid in self.track_plate_history and self.track_plate_history[tid]:
-                best_entry = max(self.track_plate_history[tid], key=lambda x: x[0])
+        # Ao final, para cada track persistente, seleciona a melhor placa
+        for tid, track in self.tracker.tracks.items():
+            if track.plate_history:
+                best_entry = max(track.plate_history, key=lambda x: x[0])
                 best_plate = best_entry[1]
-                vehicle_bbox = best_entry[2]
-                vehicle_obj = Vehicle(bbox=vehicle_bbox, id=tid, plate=best_plate)
-                if frame_counter not in final_frame_results:
-                    final_frame_results[frame_counter] = {}
-                final_frame_results[frame_counter][tid] = {"vehicle": vehicle_obj}
+                vehicle_obj = Vehicle(
+                    bbox=track.bbox + [0],
+                    id=tid,
+                    plate=best_plate,
+                    frame_nmr=track.last_frame,
+                )
+                final_results[tid] = {"vehicle": vehicle_obj}
 
         cap.release()
         if video_writer is not None:
@@ -347,5 +326,14 @@ class VideoProcessor:
         pbar.close()
         if debug:
             cv2.destroyAllWindows()
-        write_csv(final_frame_results, output_csv)
-        return final_frame_results
+
+        # Imprime no terminal as placas únicas (uma por veículo)
+        unique_plates = set()
+        for tid, data in final_results.items():
+            plate_text = data["vehicle"].plate.text if data["vehicle"].plate else ""
+            if plate_text and plate_text not in unique_plates:
+                print(f"Vehicle ID {tid}: Plate {plate_text}")
+                unique_plates.add(plate_text)
+
+        write_csv(final_results, output_csv)
+        return final_results
