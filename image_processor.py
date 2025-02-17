@@ -15,7 +15,7 @@ class ImageProcessor:
     def __init__(self):
         # Carrega o modelo principal de detecção de veículos (exportado para ONNX)
         self.vehicle_model = YOLO(
-            "models/yolo11n.onnx", verbose=False
+            "models/yolo11n.onnx", task="detect", verbose=False
         )  # Modelo ONNX gerado via export()
 
         # Carrega o detector especializado para placas (YOLOv5)
@@ -44,7 +44,7 @@ class ImageProcessor:
         com caixas no formato [x1, y1, x2, y2, conf, cls].
         """
         # Executa a inferência
-        results = self.vehicle_model(frame)
+        results = self.vehicle_model(frame, verbose=False, conf=0.4, iou=0.7)
         vehicles = []
         if results and len(results) > 0:
             # Acessa as detecções no primeiro resultado
