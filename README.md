@@ -96,6 +96,10 @@ Processa um vídeo local ou uma URL do YouTube para detecção de placas.
 uv run python cli.py video --input path/to/video.mp4 --output resultados.csv --frame-skip 2 --debug
 ```
 
+```bash
+uv run python cli.py video --input https://www.youtube.com/video-link --output resultados.csv --frame-skip 2 --debug
+```
+
 - `--input`: Caminho do arquivo de vídeo ou URL do YouTube
 - `--output`: Caminho para salvar o CSV com os resultados
 - `--frame-skip`: Número de frames a pular (para acelerar o processamento)
