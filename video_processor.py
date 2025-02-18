@@ -182,12 +182,12 @@ class VideoProcessor:
         return frame
 
     def process_video(
-        self, input_path, output_csv, output_video=None, frame_skip=10, debug=False
+        self, input_path, output_csv=None, output_video=None, frame_skip=10, debug=False
     ):
         """
         Processa o vídeo acumulando as inferências de placa para cada veículo.
-        No final, é gerada uma saída CSV com UMA linha por veículo e são impressas
-        no terminal as placas únicas.
+        No final, gera uma saída CSV (se output_csv for informado) e retorna os resultados.
+        Se debug estiver ativo, também retorna a última imagem anotada.
         """
         ALLOWED_VIDEO_FORMATS = [".mp4", ".avi", ".mkv", ".mov"]
         if not any(input_path.lower().endswith(ext) for ext in ALLOWED_VIDEO_FORMATS):
@@ -213,11 +213,10 @@ class VideoProcessor:
 
         frames_buffer = [first_frame]
         frame_indices = [0]
-        final_results = (
-            {}
-        )  # Será um dicionário com uma linha por veículo (chave: track_id)
+        final_results = {}  # Dicionário com uma linha por veículo (chave: track_id)
         frame_counter = 0
         finished = False
+        last_annotated = None  # Armazena o último frame anotado
 
         while not finished:
             while len(frames_buffer) < self.batch_size:
@@ -278,7 +277,6 @@ class VideoProcessor:
                 annotated_frame = self.annotate_frame(
                     frame.copy(), annotation_dict, tracks
                 )
-
                 if debug:
                     annotated_frame = self._annotate_debug_plate_detections(
                         annotated_frame, frame_plate_inferences
@@ -335,5 +333,12 @@ class VideoProcessor:
                 print(f"Vehicle ID {tid}: Plate {plate_text}")
                 unique_plates.add(plate_text)
 
-        write_csv(final_results, output_csv)
-        return final_results
+        # Escreve o CSV se um caminho for informado
+        if output_csv:
+            write_csv(final_results, output_csv)
+
+        # Se estiver em modo debug, retorna também a última imagem anotada
+        if debug:
+            return final_results, last_annotated
+        else:
+            return final_results
