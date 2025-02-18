@@ -62,9 +62,10 @@ A **Paladium CLI** é uma ferramenta de linha de comando para detecção de veí
 - fast_plate_ocr (ou similar, conforme a implementação do OCR)
 - Outras dependências que podem ser instaladas via `uv` (consulte o arquivo `pyproject.toml`, se houver)
 
+
 ## Instalação
 
-1. **Instale uv (se necessário)**:
+1. **Instale uv (ou seu framework favorito)**:
 ```bash
 pip install uv
 ```
@@ -78,7 +79,7 @@ uv sync
 3. **Exporte o modelo YOLO para ONNX (se necessário):**
 
 ```bash
-python generate_model.py
+uv run python generate_model.py
 ```
 
 ## Uso
@@ -92,7 +93,7 @@ Processa um vídeo local ou uma URL do YouTube para detecção de placas.
 **Exemplo:**
 
 ```bash
-python cli.py video --input path/to/video.mp4 --output resultados.csv --frame-skip 2 --debug
+uv run python cli.py video --input path/to/video.mp4 --output resultados.csv --frame-skip 2 --debug
 ```
 
 - `--input`: Caminho do arquivo de vídeo ou URL do YouTube
@@ -108,7 +109,7 @@ Processa uma única imagem para detecção de placas.
 **Exemplo:**
 
 ```bash
-python cli.py image --input path/to/image.jpg --debug
+uv run python cli.py image --input path/to/image.jpg --debug
 ```
 
 - `--input`: Caminho para a imagem
@@ -121,7 +122,7 @@ Processa recursivamente todos os vídeos e imagens dentro de uma pasta e suas su
 **Exemplo:**
 
 ```bash
-python cli.py folder --input-folder path/to/folder --output aggregated_results.csv --frame-skip 2 --debug
+uv run python cli.py folder --input-folder path/to/folder --output aggregated_results.csv --frame-skip 2 --debug
 ```
 
 - `--input`: Caminho da pasta contendo os arquivos
