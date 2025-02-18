@@ -205,7 +205,7 @@ def image(input):
 
 @cli.command()
 @click.option(
-    "--input-folder", required=True, help="Path to folder containing images or videos"
+    "--input", required=True, help="Path to folder containing images or videos"
 )
 @click.option(
     "--output", default="output.csv", help="Path to the aggregated output CSV file"
@@ -220,6 +220,9 @@ def folder(input_folder, output, frame_skip, debug):
     """
     Processa todos os vídeos ou imagens em uma pasta e suas subpastas para detecção de placas.
     Agrega os resultados em um único arquivo CSV, incluindo o caminho relativo do arquivo.
+    No modo debug:
+      - Para imagens: exibe a imagem anotada e aguarda a tecla 'c' para continuar.
+      - Para vídeos: o debug é exibido ao vivo dentro do processamento do vídeo.
     """
     import csv
     import glob
@@ -232,27 +235,32 @@ def folder(input_folder, output, frame_skip, debug):
         []
     )  # Cada linha: [file_path, source_file, frame_nmr, car_id, car_bbox, license_plate_bbox, license_plate_bbox_score, license_number, license_number_score]
 
-    # Usa glob para buscar recursivamente todos os arquivos (incluindo subdiretórios)
+    # Glob para buscar recursivamente todos os arquivos (incluindo subdiretórios)
     pattern = os.path.join(input_folder, "**", "*")
     files = glob.glob(pattern, recursive=True)
 
+    # Instancia os processadores uma única vez para todos os arquivos
+    ip = ImageProcessor()
+    vp = VideoProcessor()
+
     for file_path in files:
         if os.path.isfile(file_path):
+            # Fecha todas as janelas abertas para evitar "travamento" entre arquivos
+            cv2.destroyAllWindows()
             ext = os.path.splitext(file_path)[1].lower()
-            # Obtém o caminho relativo a partir da pasta base de entrada
             relative_path = os.path.relpath(file_path, input_folder)
             if ext in video_extensions:
                 click.echo(f"Processing video: {relative_path}")
-                vp = VideoProcessor()
-                # Usa output_csv=None para que o processador não escreva um CSV individual.
-                results = vp.process_video(
+                # Para vídeos, o método process_video já exibe o debug ao vivo
+                final_results = vp.process_video(
                     file_path,
                     output_csv=None,
                     output_video=None,
                     frame_skip=frame_skip,
                     debug=debug,
                 )
-                for track_id, data in results.items():
+                # Para vídeos, não aguardamos key press, deixando o debug ativo durante o processamento.
+                for track_id, data in final_results.items():
                     if "vehicle" in data and data["vehicle"].plate is not None:
                         vehicle = data["vehicle"]
                         plate = vehicle.plate
@@ -260,8 +268,8 @@ def folder(input_folder, output, frame_skip, debug):
                         license_plate_bbox = plate.bbox
                         aggregated_rows.append(
                             [
-                                relative_path,  # caminho relativo do arquivo
-                                os.path.basename(file_path),  # apenas o nome do arquivo
+                                relative_path,
+                                os.path.basename(file_path),
                                 vehicle.frame_nmr,
                                 track_id,
                                 f"[{' '.join(str(x) for x in car_bbox)}]",
@@ -273,12 +281,16 @@ def folder(input_folder, output, frame_skip, debug):
                         )
             elif ext in image_extensions:
                 click.echo(f"Processing image: {relative_path}")
-                ip = ImageProcessor()
                 frame = cv2.imread(file_path)
                 if frame is None:
                     click.echo(f"Warning: Could not read image {relative_path}")
                     continue
                 results, annotated_image = ip.process_image(frame)
+                if debug:
+                    cv2.imshow("Debug - Annotated Image", annotated_image)
+                    key = cv2.waitKey(0)
+                    if key == ord("c"):
+                        cv2.destroyWindow("Debug - Annotated Image")
                 for track_id, data in results.items():
                     if "vehicle" in data and data["vehicle"].plate is not None:
                         vehicle = data["vehicle"]
