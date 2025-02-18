@@ -282,7 +282,7 @@ class VideoProcessor:
                         annotated_frame, frame_plate_inferences
                     )
                     debug_text = (
-                        f"Veículo: {vehicle_detection_time:.1f}ms | "
+                        f"Veiculo: {vehicle_detection_time:.1f}ms | "
                         f"Placa: {plate_detection_time:.1f}ms | OCR: {ocr_detection_time:.1f}ms"
                     )
                     cv2.putText(
