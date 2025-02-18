@@ -12,7 +12,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 def is_youtube_url(url):
-    """Check if the input is a YouTube URL."""
+    """Verifica se a entrada é uma URL do YouTube."""
     return any(
         domain in url.lower()
         for domain in ["youtube.com/", "youtu.be/", "youtube.com/shorts/"]
@@ -39,8 +39,8 @@ class DownloadLogger:
 
 def download_youtube_video(url):
     """
-    Download YouTube video to a temporary file and return the path.
-    Returns None if download fails.
+    Faz o download do vídeo do YouTube para um arquivo temporário e retorna o caminho.
+    Retorna None se o download falhar.
     """
     try:
         # Create a temporary directory to handle the download
@@ -134,6 +134,7 @@ def download_youtube_video(url):
 
 @click.group()
 def cli():
+    """Grupo de comandos CLI."""
     pass
 
 
@@ -148,7 +149,7 @@ def cli():
 )
 @click.option("--debug", is_flag=True, help="Enable live debug mode")
 def video(input, output, video_output, frame_skip, debug):
-    """Process a video file or YouTube URL for license plate detection."""
+    """Processa um arquivo de vídeo ou URL do YouTube para detecção de placas."""
     video_path = input
     temp_path = None
 
@@ -192,7 +193,7 @@ def video(input, output, video_output, frame_skip, debug):
 @cli.command()
 @click.option("--input", required=True, help="Path to the image")
 def image(input):
-    """Process a single image for license plate detection."""
+    """Processa uma única imagem para detecção de placas."""
     processor = ImageProcessor()
     frame = cv2.imread(input)
     results, annotated_image = processor.process_image(frame)
@@ -200,6 +201,126 @@ def image(input):
         print(
             f"Detected plate: {plate['vehicle'].plate.text} (Confidence: {plate['vehicle'].plate.ocr_confidence})"
         )
+
+
+@cli.command()
+@click.option(
+    "--input-folder", required=True, help="Path to folder containing images or videos"
+)
+@click.option(
+    "--output", default="output.csv", help="Path to the aggregated output CSV file"
+)
+@click.option(
+    "--frame-skip", default=2, help="Number of frames to skip for video processing"
+)
+@click.option(
+    "--debug", is_flag=True, help="Enable live debug mode for video processing"
+)
+def folder(input_folder, output, frame_skip, debug):
+    """
+    Processa todos os vídeos ou imagens em uma pasta e suas subpastas para detecção de placas.
+    Agrega os resultados em um único arquivo CSV, incluindo o caminho relativo do arquivo.
+    """
+    import csv
+    import glob
+
+    # Define extensões de arquivos suportadas.
+    video_extensions = (".mp4", ".avi", ".mkv", ".mov")
+    image_extensions = (".jpg", ".jpeg", ".png", ".bmp", ".tiff")
+
+    aggregated_rows = (
+        []
+    )  # Cada linha: [file_path, source_file, frame_nmr, car_id, car_bbox, license_plate_bbox, license_plate_bbox_score, license_number, license_number_score]
+
+    # Usa glob para buscar recursivamente todos os arquivos (incluindo subdiretórios)
+    pattern = os.path.join(input_folder, "**", "*")
+    files = glob.glob(pattern, recursive=True)
+
+    for file_path in files:
+        if os.path.isfile(file_path):
+            ext = os.path.splitext(file_path)[1].lower()
+            # Obtém o caminho relativo a partir da pasta base de entrada
+            relative_path = os.path.relpath(file_path, input_folder)
+            if ext in video_extensions:
+                click.echo(f"Processing video: {relative_path}")
+                vp = VideoProcessor()
+                # Usa output_csv=None para que o processador não escreva um CSV individual.
+                results = vp.process_video(
+                    file_path,
+                    output_csv=None,
+                    output_video=None,
+                    frame_skip=frame_skip,
+                    debug=debug,
+                )
+                for track_id, data in results.items():
+                    if "vehicle" in data and data["vehicle"].plate is not None:
+                        vehicle = data["vehicle"]
+                        plate = vehicle.plate
+                        car_bbox = vehicle.bbox[:4]
+                        license_plate_bbox = plate.bbox
+                        aggregated_rows.append(
+                            [
+                                relative_path,  # caminho relativo do arquivo
+                                os.path.basename(file_path),  # apenas o nome do arquivo
+                                vehicle.frame_nmr,
+                                track_id,
+                                f"[{' '.join(str(x) for x in car_bbox)}]",
+                                f"[{' '.join(str(x) for x in license_plate_bbox)}]",
+                                plate.detection_confidence,
+                                plate.text,
+                                plate.ocr_confidence,
+                            ]
+                        )
+            elif ext in image_extensions:
+                click.echo(f"Processing image: {relative_path}")
+                ip = ImageProcessor()
+                frame = cv2.imread(file_path)
+                if frame is None:
+                    click.echo(f"Warning: Could not read image {relative_path}")
+                    continue
+                results, annotated_image = ip.process_image(frame)
+                for track_id, data in results.items():
+                    if "vehicle" in data and data["vehicle"].plate is not None:
+                        vehicle = data["vehicle"]
+                        plate = vehicle.plate
+                        car_bbox = vehicle.bbox[:4]
+                        license_plate_bbox = plate.bbox
+                        aggregated_rows.append(
+                            [
+                                relative_path,
+                                os.path.basename(file_path),
+                                vehicle.frame_nmr,
+                                track_id,
+                                f"[{' '.join(str(x) for x in car_bbox)}]",
+                                f"[{' '.join(str(x) for x in license_plate_bbox)}]",
+                                plate.detection_confidence,
+                                plate.text,
+                                plate.ocr_confidence,
+                            ]
+                        )
+            else:
+                click.echo(f"Skipping unsupported file: {relative_path}")
+
+    # Escreve os resultados agregados no arquivo CSV, incluindo a informação do caminho do arquivo.
+    with open(output, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "file_path",
+                "source_file",
+                "frame_nmr",
+                "car_id",
+                "car_bbox",
+                "license_plate_bbox",
+                "license_plate_bbox_score",
+                "license_number",
+                "license_number_score",
+            ]
+        )
+        for row in aggregated_rows:
+            writer.writerow(row)
+
+    click.echo(f"Aggregated results saved to {output}")
 
 
 if __name__ == "__main__":
