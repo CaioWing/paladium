@@ -63,7 +63,7 @@ class ImageProcessor:
         """
         Detecta placas utilizando o detector especializado baseado em YOLOv5.
         """
-        # Converte para RGB se necessário
+        # Converte para RGB/Cinza se necessário
         _ = self.preprocess_image(frame)
         with torch.no_grad():
             outputs = self.plate_model(frame, size=640)
