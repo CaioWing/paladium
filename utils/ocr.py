@@ -79,10 +79,15 @@ class OptimizedOCR:
         return "", 0.0
 
 
-# Instância global
-ocr_reader = OptimizedOCR()
+_ocr_reader = None
 
 
-# Função para manter a compatibilidade com o código existente
+def get_ocr_reader():
+    global _ocr_reader
+    if _ocr_reader is None:
+        _ocr_reader = OptimizedOCR()
+    return _ocr_reader
+
+
 def read_license_plate(license_plate_crop):
-    return ocr_reader.read_license_plate(license_plate_crop)
+    return get_ocr_reader().read_license_plate(license_plate_crop)
