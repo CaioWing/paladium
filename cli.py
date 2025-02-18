@@ -1,7 +1,5 @@
 import click
 import cv2
-from video_processor import VideoProcessor
-from image_processor import ImageProcessor
 import yt_dlp
 import os
 import tempfile
@@ -149,6 +147,8 @@ def cli():
 )
 @click.option("--debug", is_flag=True, help="Enable live debug mode")
 def video(input, output, video_output, frame_skip, debug):
+    from video_processor import VideoProcessor
+
     """Processa um arquivo de vídeo ou URL do YouTube para detecção de placas."""
     video_path = input
     temp_path = None
@@ -193,6 +193,8 @@ def video(input, output, video_output, frame_skip, debug):
 @cli.command()
 @click.option("--input", required=True, help="Path to the image")
 def image(input):
+    from image_processor import ImageProcessor
+
     """Processa uma única imagem para detecção de placas."""
     processor = ImageProcessor()
     frame = cv2.imread(input)
@@ -216,7 +218,7 @@ def image(input):
 @click.option(
     "--debug", is_flag=True, help="Enable live debug mode for video processing"
 )
-def folder(input_folder, output, frame_skip, debug):
+def folder(input, output, frame_skip, debug):
     """
     Processa todos os vídeos ou imagens em uma pasta e suas subpastas para detecção de placas.
     Agrega os resultados em um único arquivo CSV, incluindo o caminho relativo do arquivo.
@@ -226,6 +228,8 @@ def folder(input_folder, output, frame_skip, debug):
     """
     import csv
     import glob
+    from image_processor import ImageProcessor
+    from video_processor import VideoProcessor
 
     # Define extensões de arquivos suportadas.
     video_extensions = (".mp4", ".avi", ".mkv", ".mov")
@@ -236,7 +240,7 @@ def folder(input_folder, output, frame_skip, debug):
     )  # Cada linha: [file_path, source_file, frame_nmr, car_id, car_bbox, license_plate_bbox, license_plate_bbox_score, license_number, license_number_score]
 
     # Glob para buscar recursivamente todos os arquivos (incluindo subdiretórios)
-    pattern = os.path.join(input_folder, "**", "*")
+    pattern = os.path.join(input, "**", "*")
     files = glob.glob(pattern, recursive=True)
 
     # Instancia os processadores uma única vez para todos os arquivos
@@ -248,7 +252,7 @@ def folder(input_folder, output, frame_skip, debug):
             # Fecha todas as janelas abertas para evitar "travamento" entre arquivos
             cv2.destroyAllWindows()
             ext = os.path.splitext(file_path)[1].lower()
-            relative_path = os.path.relpath(file_path, input_folder)
+            relative_path = os.path.relpath(file_path, input)
             if ext in video_extensions:
                 click.echo(f"Processing video: {relative_path}")
                 # Para vídeos, o método process_video já exibe o debug ao vivo
